@@ -6,6 +6,7 @@ from typing import Tuple, Optional
 from pytorch3d.ops.knn import knn_points
 from pytorch3d.renderer.cameras import PerspectiveCameras
 from data_utils import load_gaussians_from_ply, colours_from_spherical_harmonics
+from pytorch3d.transforms import quaternion_to_matrix
 
 class Gaussians:
 
@@ -238,13 +239,18 @@ class Gaussians:
         if self.is_isotropic:
 
             ### YOUR CODE HERE ###
-            cov_3D = None  # (N, 3, 3)
+            cov_3D = scales.view(-1, 1, 1) ** 2 * torch.eye(3, device=scales.device).expand(scales.size(0), 3, 3)
 
         # HINT: You can use a function from pytorch3d to convert quaternions to rotation matrices.
         else:
 
             ### YOUR CODE HERE ###
-            cov_3D = None  # (N, 3, 3)
+            rotation_matrices = quaternion_to_matrix(quats)  
+
+            scales_matrix = torch.diag_embed(scales)
+            cov_3D = torch.matmul(rotation_matrices, scales_matrix)
+            cov_3D = torch.matmul(cov_3D, rotation_matrices.transpose(-1, -2))  # (N, 3, 3)
+
 
         return cov_3D
 
@@ -271,20 +277,20 @@ class Gaussians:
         """
         ### YOUR CODE HERE ###
         # HINT: For computing the jacobian J, can you find a function in this file that can help?
-        J = None  # (N, 2, 3)
+        J = self._compute_jacobian(means_3D, camera, img_size)  # (N, 2, 3)
 
         ### YOUR CODE HERE ###
         # HINT: Can you extract the world to camera rotation matrix (W) from one of the inputs
         # of this function?
-        W = None  # (N, 3, 3)
+        W = camera.get_world_to_view_transform().get_matrix()[:, :3, :3]  # (N, 3, 3)
 
         ### YOUR CODE HERE ###
         # HINT: Can you find a function in this file that can help?
-        cov_3D = None  # (N, 3, 3)
+        cov_3D = self.compute_cov_3D(quats, scales)  # (N, 3, 3)
 
         ### YOUR CODE HERE ###
         # HINT: Use the above three variables to compute cov_2D
-        cov_2D = None  # (N, 2, 2)
+        cov_2D = torch.matmul(J, torch.matmul(cov_3D, J.transpose(-1, -2)))  # (N, 2, 2)
 
         # Post processing to make sure that each 2D Gaussian covers atleast approximately 1 pixel
         cov_2D[:, 0, 0] += 0.3
@@ -309,7 +315,7 @@ class Gaussians:
         ### YOUR CODE HERE ###
         # HINT: Do note that means_2D have units of pixels. Hence, you must apply a
         # transformation that moves points in the world space to screen space.
-        means_2D = None  # (N, 2)
+        means_2D = camera.transform_points_screen(means_3D)[:, :2]
         return means_2D
 
     @staticmethod
@@ -357,7 +363,9 @@ class Gaussians:
         """
         ### YOUR CODE HERE ###
         # HINT: Refer to README for a relevant equation
-        power = None  # (N, H*W)
+        diff = points_2D - means_2D 
+        intermediate = torch.einsum('nhi,nij->nhj', diff, cov_2D_inverse)
+        power = -0.5 * torch.einsum('nhi,nhi->nh', intermediate, diff)  # (N, H*W)
 
         return power
 
