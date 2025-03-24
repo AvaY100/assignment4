@@ -49,7 +49,7 @@ def create_renders(args):
 
         with torch.no_grad():
             # Rendering scene using gaussian splatting
-            image, depth, mask = scene.render(camera)
+            image, depth, mask = scene.render(camera, args.gaussians_per_splat, img_size, torch.tensor([1.0, 1.0, 1.0], device=args.device))
 
         debug_path = os.path.join(debug_root, f"{i:03d}.png")
         img = image.detach().cpu().numpy()

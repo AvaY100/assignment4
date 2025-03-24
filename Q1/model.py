@@ -248,7 +248,7 @@ class Gaussians:
             ### YOUR CODE HERE ###
             rotation_matrices = quaternion_to_matrix(quats)  
 
-            scales_matrix = torch.diag_embed(scales)
+            scales_matrix = torch.diag_embed(scales**2)
             cov_3D = torch.matmul(rotation_matrices, scales_matrix)
             cov_3D = torch.matmul(cov_3D, rotation_matrices.transpose(-1, -2))  # (N, 3, 3)
 
@@ -291,7 +291,14 @@ class Gaussians:
 
         ### YOUR CODE HERE ###
         # HINT: Use the above three variables to compute cov_2D
-        cov_2D = torch.matmul(J, torch.matmul(cov_3D, J.transpose(-1, -2)))  # (N, 2, 2)
+        # Compute the intermediate product of W and cov_3D
+        intermediate = W @ cov_3D  # (N, 3, 3)
+
+        # Apply the transpose of W to the intermediate result
+        intermediate = intermediate @ W.transpose(1, 2)  # (N, 3, 3)
+
+        # Apply the Jacobian J to project the 3D covariance to 2D
+        cov_2D = J @ intermediate @ J.transpose(1, 2)  # (N, 2, 2)
 
         # Post processing to make sure that each 2D Gaussian covers atleast approximately 1 pixel
         cov_2D[:, 0, 0] += 0.3
@@ -362,11 +369,20 @@ class Gaussians:
             power           :   A torch.Tensor of shape (N, H*W) representing the computed
                                 power of the N 2D Gaussians at every pixel location in an image.
         """
-        ### YOUR CODE HERE ###
-        # HINT: Refer to README for a relevant equation
-        diff = points_2D - means_2D
-        intermediate = torch.einsum('nhi,nij->nhj', diff, cov_2D_inverse)
-        power = -0.5 * torch.einsum('nhi,nhj->nh', intermediate, diff)  # (N, H*W)
+        # Compute the difference between points and means
+        diff = points_2D - means_2D  # (N, H*W, 2)
+
+        # Reshape the difference for matrix multiplication
+        diff_expanded = diff.unsqueeze(-2)  # (N, H*W, 1, 2)
+
+        # Compute the intermediate product with the inverse covariance
+        intermediate = torch.matmul(diff_expanded, cov_2D_inverse.unsqueeze(1))  # (N, H*W, 1, 2)
+
+        # Compute the final product with the transposed difference
+        power_matrix = torch.matmul(intermediate, diff.unsqueeze(-1))  # (N, H*W, 1, 1)
+
+        # Squeeze the last two dimensions to get the final power
+        power = -0.5 * power_matrix.squeeze(-1).squeeze(-1)  # (N, H*W)
 
         return power
 
@@ -441,7 +457,7 @@ class Scene:
 
         return sorted_idxs
 
-    def compute_alphas(self, opacities, means_2D, cov_2D, img_size, batch_size=1024):
+    def compute_alphas(self, opacities, means_2D, cov_2D, img_size):
         """
         Given some parameters of N ordered Gaussians, this function computes
         the alpha values.
@@ -454,7 +470,7 @@ class Scene:
             cov_2D      :   A torch.Tensor of shape (N, 2, 2) with the covariances
                             of the 2D Gaussians.
             img_size    :   The (width, height) of the image to be rendered.
-            batch_size  :   The number of Gaussians to process in one batch.
+
 
         Returns:
             alphas      :   A torch.Tensor of shape (N, H, W) with the computed alpha
@@ -462,21 +478,34 @@ class Scene:
                             pixel location.
         """
         W, H = img_size
+
+        # point_2D contains all possible pixel locations in an image
         xs, ys = torch.meshgrid(torch.arange(W), torch.arange(H), indexing="xy")
-        points_2D = torch.stack((xs.flatten(), ys.flatten()), dim=1).to(self.device)  # (H*W, 2)
+        points_2D = torch.stack((xs.flatten(), ys.flatten()), dim = 1)  # (H*W, 2)
+        points_2D = points_2D.to(self.device)
+
         points_2D = points_2D.unsqueeze(0)  # (1, H*W, 2)
+        means_2D = means_2D.unsqueeze(1)  # (N, 1, 2)
 
-        alphas = torch.zeros((len(opacities), H, W), device=self.device)
+        ### YOUR CODE HERE ###
+        # HINT: Can you find a function in this file that can help?
+        cov_2D_inverse = None  # (N, 2, 2) TODO: Verify shape
+        cov_2D_inverse = self.gaussians.invert_cov_2D(cov_2D)  # (N, 2, 2)
 
-        for start in range(0, len(opacities), batch_size):
-            end = min(start + batch_size, len(opacities))
-            means_2D_batch = means_2D[start:end].unsqueeze(1)  # (B, 1, 2)
-            cov_2D_inverse_batch = self.gaussians.invert_cov_2D(cov_2D[start:end])  # (B, 2, 2)
-            power = self.gaussians.evaluate_gaussian_2D(points_2D, means_2D_batch, cov_2D_inverse_batch)  # (B, H*W)
-            exp_power = torch.where(power > 0.0, 0.0, torch.exp(power))
-            alphas_batch = opacities[start:end, None] * exp_power  # (B, H*W)
-            alphas[start:end] = alphas_batch.view(-1, H, W)  # (B, H, W)
+        ### YOUR CODE HERE ###
+        # HINT: Can you find a function in this file that can help?
+        power = None  # (N, H*W)
+        power = self.gaussians.evaluate_gaussian_2D(points_2D, means_2D, cov_2D_inverse) 
 
+        # Computing exp(power) with some post processing for numerical stability
+        exp_power = torch.where(power > 0.0, 0.0, torch.exp(power))
+
+        ### YOUR CODE HERE ###
+        # HINT: Refer to README for a relevant equation.
+        alphas = opacities[:, None] * exp_power
+        alphas = torch.reshape(alphas, (-1, H, W))  # (N, H, W)
+
+        # Post processing for numerical stability
         alphas = torch.minimum(alphas, torch.full_like(alphas, 0.99))
         alphas = torch.where(alphas < 1/255.0, 0.0, alphas)
 
@@ -569,7 +598,7 @@ class Scene:
                                         each pixel computed using the N ordered Gaussians. This will be useful
                                         for mini-batch splatting in the next iteration.
         """
-        # Step 1: Compute 2D gaussian parameters
+        # # Step 1: Compute 2D gaussian parameters
 
         ### YOUR CODE HERE ###
         # HINT: Can you find a function in this file that can help?
