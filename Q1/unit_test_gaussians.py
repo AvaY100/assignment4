@@ -59,6 +59,8 @@ def run_test_1():
 
     your_answer = gaussians.compute_cov_3D(quats, scales)
 
+    # import pdb; pdb.set_trace()
+
     return torch.all(torch.isclose(your_answer, gt_answer, rtol=0.0, atol=1e-3))
 
 def run_test_2():
