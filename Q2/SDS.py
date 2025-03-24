@@ -150,20 +150,19 @@ class SDS:
 
         # predict the noise residual with unet, NO grad!
         with torch.no_grad():
-            ### YOUR CODE HERE ###
- 
+            noise = torch.randn_like(latents)
+            noise_latent = self.scheduler.add_noise(latents, noise, t)
+            noise_pred = self.unet(noise_latent, t, encoder_hidden_states=text_embeddings).sample
 
             if text_embeddings_uncond is not None and guidance_scale != 1:
-                ### YOUR CODE HERE ###
-                pass
- 
-
+                noise_pred_uncond = self.unet(noise_latent, t, encoder_hidden_states=text_embeddings_uncond).sample
+                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred - noise_pred_uncond)
 
         # Compute SDS loss
         w = 1 - self.alphas[t]
-        ### YOUR CODE HERE ###
+        grad = w * (noise_pred - noise)
+        grad = torch.nan_to_num(grad)
 
-
-        loss = 
-
+        target = (latents - grad).detach()
+        loss = 0.5 * F.mse_loss(latents.float(), target, reduction='sum') / latents.shape[0]
         return loss

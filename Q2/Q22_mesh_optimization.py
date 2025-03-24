@@ -97,16 +97,22 @@ def optimize_mesh_texture(
         mesh.textures = TexturesVertex(verts_features=color_field(vertices))
 
         ### YOUR CODE HERE ###
+        # Randomly sample a camera view
+        R, T = look_at_view_transform(dist=3, elev=0, azim=np.random.uniform(0, 360))
+        camera = FoVPerspectiveCameras(device=device, R=R, T=T)
 
         # Forward pass
         # Render a randomly sampled camera view to optimize in this iteration
-        rend = 
+        rend = renderer(mesh, cameras=camera, lights=lights)
         # Encode the rendered image to latents
-        latents = 
+        img = rend[..., :3].permute(0, 3, 1, 2)  # Convert to (N, C, H, W)
+        latents = sds.encode_imgs(img)
         # Compute the loss
-        loss =
-
-
+        loss = sds.sds_loss(
+            latents,
+            text_embeddings=embeddings['default'],
+            text_embeddings_uncond=embeddings['uncond']
+        )
 
         # Backward pass
         loss.backward()
@@ -139,7 +145,7 @@ def optimize_mesh_texture(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", type=str, default="a hamburger")
+    parser.add_argument("--prompt", type=str, default="a panda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument(
